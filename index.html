@@ -1,0 +1,576 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR数字人作品导览</title>
+
+    <!-- A-Frame -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+
+    <!-- MindAR -->
+    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+
+    <!-- 绿幕抠像 -->
+    <script>
+        AFRAME.registerShader('green-key', {
+
+            schema: {
+                src: {
+                    type: 'map',
+                    is: 'uniform'
+                },
+
+                threshold: {
+                    type: 'number',
+                    is: 'uniform',
+                    default: 0.12
+                },
+
+                softness: {
+                    type: 'number',
+                    is: 'uniform',
+                    default: 0.10
+                },
+
+                spill: {
+                    type: 'number',
+                    is: 'uniform',
+                    default: 0.65
+                }
+            },
+
+            vertexShader: `
+                varying vec2 vUv;
+
+                void main() {
+                    vUv = uv;
+                    gl_Position =
+                        projectionMatrix *
+                        modelViewMatrix *
+                        vec4(position, 1.0);
+                }
+            `,
+
+            fragmentShader: `
+                precision mediump float;
+
+                uniform sampler2D src;
+                uniform float threshold;
+                uniform float softness;
+                uniform float spill;
+
+                varying vec2 vUv;
+
+                void main() {
+
+                    vec4 color = texture2D(src, vUv);
+
+                    float greenDominance =
+                        color.g - max(color.r, color.b);
+
+                    float alpha = 1.0 - smoothstep(
+                        threshold,
+                        threshold + softness,
+                        greenDominance
+                    );
+
+                    float greenExcess =
+                        max(0.0, color.g - max(color.r, color.b));
+
+                    color.g -=
+                        greenExcess * spill * (1.0 - alpha);
+
+                    gl_FragColor = vec4(
+                        color.rgb,
+                        color.a * alpha
+                    );
+                }
+            `
+        });
+    </script>
+
+    <style>
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background: #101827;
+        }
+
+        /* 顶部状态 */
+        #status {
+            position: fixed;
+            top: 25px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            z-index: 1000;
+            pointer-events: none;
+        }
+
+        .status-bg {
+            display: inline-block;
+            background: rgba(0,0,0,0.72);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 20px;
+            font-size: 15px;
+        }
+
+        /* AR 启动页面 */
+        #start-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 20000;
+
+            display: flex;
+            justify-content: center;
+            align-items: center;
+
+            padding: 25px;
+            box-sizing: border-box;
+
+            background: rgba(13, 24, 43, 0.96);
+        }
+
+        #start-overlay[hidden] {
+            display: none;
+        }
+
+        .start-card {
+            width: 100%;
+            max-width: 380px;
+            text-align: center;
+            color: white;
+        }
+
+        .start-card h1 {
+            font-size: 27px;
+            letter-spacing: 2px;
+            margin-bottom: 15px;
+        }
+
+        .start-card p {
+            color: #bdc8d9;
+            line-height: 1.8;
+            font-size: 15px;
+        }
+
+        .start-decoration {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+
+        #start-ar-button {
+            margin-top: 30px;
+            width: 100%;
+            padding: 17px;
+            border: none;
+            border-radius: 35px;
+
+            background: #d7b779;
+            color: #18243a;
+
+            font-size: 17px;
+            font-weight: bold;
+        }
+
+        #start-ar-button:disabled {
+            opacity: 0.6;
+        }
+
+        /* 声音播放按钮 */
+        #play-button {
+            position: fixed;
+            bottom: 35px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9999;
+
+            padding: 16px 28px;
+            border: none;
+            border-radius: 30px;
+
+            background: #ffffff;
+            color: #172b48;
+
+            font-size: 17px;
+            font-weight: bold;
+
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+
+        #play-button[hidden] {
+            display: none;
+        }
+
+        #play-button:disabled {
+            opacity: 0.8;
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <!-- 顶部状态 -->
+    <div id="status">
+        <span id="status-text" class="status-bg">
+            欢迎使用 AR 数字人作品导览
+        </span>
+    </div>
+
+    <!-- 初始启动页面 -->
+    <div id="start-overlay">
+
+        <div class="start-card">
+
+            <div class="start-decoration">✦</div>
+
+            <h1>AR 数字人作品导览</h1>
+
+            <p>
+                欢迎来到作品互动体验。
+                <br>
+                点击下方按钮，开启摄像头，
+                <br>
+                扫描作品即可观看数字人讲解。
+            </p>
+
+            <button id="start-ar-button" disabled>
+                正在准备 AR...
+            </button>
+
+            <p style="font-size:12px;margin-top:20px;">
+                请允许浏览器访问摄像头
+            </p>
+
+        </div>
+
+    </div>
+
+    <!-- 数字人播放按钮 -->
+    <button id="play-button" hidden>
+        点击播放作品讲解
+    </button>
+
+    <!-- AR 场景 -->
+    <a-scene
+        mindar-image="
+            imageTargetSrc: ./targets/targets.mind;
+            autoStart: false;
+            uiLoading: no;
+            uiError: no;
+            uiScanning: no
+        "
+        color-space="sRGB"
+        renderer="colorManagement: true"
+        vr-mode-ui="enabled: false"
+        device-orientation-permission-ui="enabled: false">
+
+        <!-- 视频资源 -->
+        <a-assets>
+
+            <video
+                id="avatar-video"
+                src="./videos/avatar-test.mp4"
+                preload="auto"
+                playsinline
+                webkit-playsinline
+                crossorigin="anonymous">
+            </video>
+
+        </a-assets>
+
+        <!-- 摄像头 -->
+        <a-camera
+            position="0 0 0"
+            look-controls="enabled: false">
+        </a-camera>
+
+        <!-- 图片识别目标 -->
+        <a-entity
+            id="artwork-target"
+            mindar-image-target="targetIndex: 0">
+
+            <!-- 数字人 -->
+            <a-plane
+                id="avatar-plane"
+                position="0 0.45 0.1"
+                width="0.5"
+                height="0.87"
+                visible="false"
+                material="
+                    shader: green-key;
+                    src: #avatar-video;
+                    threshold: 0.12;
+                    softness: 0.10;
+                    spill: 0.65;
+                    transparent: true;
+                    side: double
+                ">
+            </a-plane>
+
+        </a-entity>
+
+    </a-scene>
+
+    <!-- 页面控制 -->
+    <script>
+
+        const scene = document.querySelector("a-scene");
+
+        const startOverlay =
+            document.querySelector("#start-overlay");
+
+        const startButton =
+            document.querySelector("#start-ar-button");
+
+        const statusText =
+            document.querySelector("#status-text");
+
+        const target =
+            document.querySelector("#artwork-target");
+
+        const video =
+            document.querySelector("#avatar-video");
+
+        const plane =
+            document.querySelector("#avatar-plane");
+
+        const playButton =
+            document.querySelector("#play-button");
+
+        let arSystem = null;
+        let targetVisible = false;
+        let arStarting = false;
+
+        // 获取 MindAR 系统
+        function prepareAR() {
+
+            arSystem =
+                scene.systems["mindar-image-system"];
+
+            if (arSystem) {
+
+                startButton.disabled = false;
+
+                startButton.textContent =
+                    "开始 AR 体验";
+
+                statusText.textContent =
+                    "准备完成，请点击开始体验";
+
+                console.log("MindAR 系统准备完成");
+
+            }
+
+        }
+
+        if (scene.hasLoaded) {
+            prepareAR();
+        } else {
+            scene.addEventListener(
+                "loaded",
+                prepareAR,
+                { once: true }
+            );
+        }
+
+        // 用户点击开始 AR
+        startButton.addEventListener("click", () => {
+
+            if (!arSystem || arStarting) {
+                return;
+            }
+
+            arStarting = true;
+
+            startButton.disabled = true;
+
+            startButton.textContent =
+                "正在启动，请稍候...";
+
+            statusText.textContent =
+                "正在启动摄像头和 AR 引擎";
+
+            try {
+
+                // 在用户点击事件中启动摄像头
+                const result = arSystem.start();
+
+                // 隐藏启动页面
+                startOverlay.hidden = true;
+
+                // 处理可能出现的启动异常
+                if (result && typeof result.catch === "function") {
+
+                    result.catch(error => {
+
+                        console.error(error);
+
+                        showStartError(
+                            "AR 启动失败：" + error.message
+                        );
+
+                    });
+
+                }
+
+            } catch (error) {
+
+                console.error(error);
+
+                showStartError(
+                    "AR 启动失败：" + error.message
+                );
+
+            }
+
+        });
+
+        // 启动失败
+        function showStartError(message) {
+
+            arStarting = false;
+
+            startOverlay.hidden = false;
+
+            startButton.disabled = false;
+
+            startButton.textContent =
+                "重新启动 AR";
+
+            statusText.textContent = message;
+
+        }
+
+        // AR 初始化成功
+        scene.addEventListener("arReady", () => {
+
+            arStarting = false;
+
+            statusText.textContent =
+                "摄像头已启动，请对准作品";
+
+            console.log("AR 初始化成功");
+
+        });
+
+        // AR 初始化失败
+        scene.addEventListener("arError", event => {
+
+            console.error("AR 错误：", event.detail);
+
+            showStartError(
+                "AR 启动失败，请检查摄像头权限或浏览器兼容性"
+            );
+
+        });
+
+        // 识别到作品
+        target.addEventListener("targetFound", () => {
+
+            targetVisible = true;
+
+            statusText.textContent =
+                "作品识别成功！请点击播放讲解";
+
+            plane.setAttribute("visible", true);
+
+            playButton.hidden = false;
+
+            playButton.disabled = false;
+
+            playButton.textContent =
+                "点击播放作品讲解";
+
+        });
+
+        // 用户点击播放
+        playButton.addEventListener("click", async () => {
+
+            if (!targetVisible) {
+                return;
+            }
+
+            try {
+
+                video.muted = false;
+
+                video.volume = 1;
+
+                video.currentTime = 0;
+
+                await video.play();
+
+                playButton.textContent =
+                    "讲解播放中";
+
+                playButton.disabled = true;
+
+                statusText.textContent =
+                    "数字人正在为你讲解";
+
+            } catch (error) {
+
+                console.error(error);
+
+                playButton.disabled = false;
+
+                playButton.textContent =
+                    "重新播放作品讲解";
+
+                statusText.textContent =
+                    "播放失败，请再次点击";
+
+            }
+
+        });
+
+        // 视频播放结束
+        video.addEventListener("ended", () => {
+
+            if (!targetVisible) {
+                return;
+            }
+
+            playButton.disabled = false;
+
+            playButton.textContent =
+                "重新播放作品讲解";
+
+            statusText.textContent =
+                "讲解结束";
+
+        });
+
+        // 作品离开画面
+        target.addEventListener("targetLost", () => {
+
+            targetVisible = false;
+
+            video.pause();
+
+            video.currentTime = 0;
+
+            plane.setAttribute("visible", false);
+
+            playButton.hidden = true;
+
+            playButton.disabled = false;
+
+            statusText.textContent =
+                "请重新对准作品";
+
+        });
+
+    </script>
+
+</body>
+</html>
